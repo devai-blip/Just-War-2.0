@@ -522,6 +522,8 @@ body.touch #slots div img{max-width:56px;max-height:32px}
         <div class="col">
           <div class="preview" id="vwPreview" style="cursor:default"><div class="tag"><b id="vwPvName"></b><span class="muted" id="vwPvCls"></span></div></div>
           <div class="card"><h3>SPESIFIKASI</h3><dl class="kv" id="vwPvKv"></dl></div>
+          <div class="card" id="vwModsCard"><h3>MODUL &amp; PELURU (riset)</h3><div id="vwMods"></div></div>
+          <div class="card"><h3>SETELAN KONTROL KENDARAAN</h3><div id="vwSettings"></div></div>
         </div>
       </div>
 
@@ -4900,6 +4902,8 @@ function vStats(v){
     v.trav=P(S.trav)*(v.casemate?.6:1); v.elev=[-8,v.cls==='spaa'?85:20];
     v.arc=v.casemate?14:180; v.ammo={ap:v.cls==='spaa'?0:30,he:v.cls==='spaa'?0:15};
     if(v.cls==='mbt'&&T===3) v.gun.apfsds=true;
+    v.crewN=v.cls==='spaa'?(v.barrels?3:2):v.cls==='lt'?3:4;
+    if(!v.gun.auto) vShells(v);
   } else if(v.dom==='sea'){
     const C=v.cls, m=!!v.modern;
     const S={
@@ -4930,6 +4934,27 @@ function vStats(v){
   if(typeof v.sam==='number') v.samN=v.sam;
   return v;
 }
+/* shell types per tank gun. id 0 = default AP, always available; HE always available; the rest are researchable modules. */
+function vShells(v){
+  const g=v.gun, cal=g.cal, out=[];
+  out.push({id:'ap',name:'AP',kind:'ap',pen:g.pen,dmg:g.dmg,v0:g.v0});
+  out.push({id:'he',name:'HE',kind:'he',pen:Math.max(6,Math.round(cal*.32)),dmg:Math.round(g.dmg*.95),v0:Math.round(g.v0*.82),splash:Math.max(3,cal/12)});
+  if(g.apfsds) out.push({id:'sabot',name:'APFSDS',kind:'apcr',pen:Math.round(g.pen*1.5),dmg:Math.round(g.dmg*.8),v0:Math.round(g.v0*1.5),mod:1});
+  else if(cal>=57) out.push({id:'apcr',name:'APCR',kind:'apcr',pen:Math.round(g.pen*1.32),dmg:Math.round(g.dmg*.72),v0:Math.round(g.v0*1.26),mod:1});
+  if(cal>=75&&(v.tier>=2||v.recoilless)) out.push({id:'heat',name:'HEAT',kind:'heat',pen:Math.round(Math.max(g.pen*1.05,cal*3.1)),dmg:Math.round(g.dmg*.92),v0:Math.round(g.v0*.9),heat:1,mod:1});
+  g.shells=out;
+}
+/* research modules per land vehicle: extra shells + performance upgrades (RP, no money). */
+function VMODS(v){
+  if(v.dom!=='land') return [];
+  const m=[], rp=t=>[300,700,1400][Math.min(2,(v.tier||1)-1)]*t;
+  if(v.gun&&v.gun.shells) for(const sh of v.gun.shells){ if(sh.mod) m.push({id:'sh_'+sh.id,name:'Peluru '+sh.name,kind:'shell',ref:sh.id,rp:rp(1),desc:sh.kind==='heat'?'Hulu ledak berongga, penetrasi tetap di segala jarak.':'Peluru sub-kaliber, penetrasi & kecepatan lebih tinggi.'}); }
+  m.push({id:'mobil',name:'Transmisi & mesin',kind:'engine',rp:rp(.8),desc:'Akselerasi dan kecepatan belok lebih baik.'});
+  m.push({id:'tracks',name:'Pelacak baru',kind:'tracks',rp:rp(.7),desc:'Pelacak putus diperbaiki jauh lebih cepat.'});
+  m.push({id:'optics',name:'Optik & teropong',kind:'optics',rp:rp(.9),desc:'Perbesaran bidik lebih tinggi, musuh ditandai lebih jauh.'});
+  m.push({id:'parts',name:'Suku cadang & regu perbaikan',kind:'parts',rp:rp(.8),desc:'Perbaikan modul dan penggantian awak lebih cepat.'});
+  return m;
+}
 const VTREE=nat=>Object.values(VEHICLES).filter(v=>v.nat===nat);
 const VLINES={land:['lt','mbt','td','spaa'],sea:['boat','dd','cl','bb','ss','cv'],air:['jet','heli']};
 const VMODES={
@@ -4943,7 +4968,19 @@ const VSave={
     if(!w.rp||typeof w.rp!=='object') w.rp={}; if(!Array.isArray(w.unl)) w.unl=[]; if(!w.sel||typeof w.sel!=='object') w.sel={};
     if(!VN[w.nat]) w.nat='us'; if(w.dom!=='land'&&w.dom!=='sea') w.dom='land'; if(!VMODES[w.mode]) w.mode='ab'; if(!(w.size>=1&&w.size<=5)) w.size=3;
     if(!w.stats) w.stats={battles:0,wins:0,kills:0};
+    if(!w.mods||typeof w.mods!=='object') w.mods={};
+    if(typeof w.coop!=='boolean') w.coop=true; if(typeof w.noAir!=='boolean') w.noAir=false;
     return w; },
+  modList(id){ const a=this.p.mods[id]; return Array.isArray(a)?a:[]; },
+  hasMod(id,mid){ return this.modList(id).includes(mid); },
+  researchMod(id,mid){ const v=VEHICLES[id], w=this.p; if(!v) return 'x'; const m=VMODS(v).find(x=>x.id===mid); if(!m) return 'x'; if(this.hasMod(id,mid)) return 'ok';
+    if((w.rp[v.nat]|0)<m.rp) return 'Poin riset (RP) '+VN[v.nat].name+' belum cukup.'; w.rp[v.nat]-=m.rp; (w.mods[id]=this.modList(id)).push(mid); Save.save(); return 'ok'; },
+  shellsFor(id){ const v=VEHICLES[id]; if(!v||!v.gun||!v.gun.shells) return []; const have=this.modList(id); return v.gun.shells.filter(sh=>!sh.mod||have.includes('sh_'+sh.id)); },
+  keyDefs(){ return [['shell','KeyX','Ganti jenis peluru'],['scout','KeyB','Teropong / tandai musuh'],['range','KeyT','Ukur jarak (rangefinder)'],['repair','KeyR','Perbaiki modul'],['sec','KeyQ','Senjata kedua'],['ter','KeyE','Senjata ketiga / dukungan udara'],['dive','KeyC','Kapal selam: menyelam / naik'],['fly','KeyF','Terbangkan pesawat / kembali'],['view','KeyV','Ganti pandangan']]; },
+  keyMap(){ const w=this.p; if(!w.keys||typeof w.keys!=='object') w.keys={}; const m={}; for(const [a,def] of this.keyDefs()) m[a]=w.keys[a]||def; return m; },
+  keyAct(code){ const m=this.keyMap(); for(const a in m) if(m[a]===code) return a; return (code==='Digit2'?'sec':code==='Digit3'?'ter':code==='KeyG'?'sec':''); },
+  setKey(act,code){ const w=this.p; if(!w.keys) w.keys={}; for(const a in w.keys) if(w.keys[a]===code) delete w.keys[a]; const def=this.keyDefs().find(d=>d[0]===act); if(def&&def[1]===code) delete w.keys[act]; else w.keys[act]=code; Save.save(); },
+    perk(id,kind){ const v=VEHICLES[id]; if(!v) return false; const mid={engine:'mobil',tracks:'tracks',optics:'optics',parts:'parts'}[kind]; return mid?this.hasMod(id,mid):false; },
   rp(nat){ return this.p.rp[nat]|0; },
   unlocked(id){ const v=VEHICLES[id]; return !!v&&(v.rp===0||this.p.unl.includes(id)); },
   prevOk(id){ const v=VEHICLES[id]; if(!v) return false; if(v.tier===1) return true; const prev=Object.values(VEHICLES).find(o=>o.nat===v.nat&&o.cls===v.cls&&o.tier===v.tier-1); return !prev||this.unlocked(prev.id); },
@@ -5499,7 +5536,7 @@ const VWar={
     const net=Net.role==='host'; let plan=[];
     if(net){ const err=VNet.canStart(); if(err){ Game.toast(err); return; } plan=VNet.plan(dom,w.coop!==false); }
     const n0=1+plan.filter(p=>p.team===0).length, n1=plan.filter(p=>p.team===1).length;
-    this.setup({dom,mode:w.mode,size:Math.max(w.size,n0,n1),seed:(Math.random()*1e9)|0,net,client:false});
+    this.setup({dom,mode:w.mode,size:Math.max(w.size,n0,n1),seed:(Math.random()*1e9)|0,net,client:false}); this.noAir=!!w.noAir;
     const t1=plan.find(p=>p.team===1), nats=VNATIONS.map(n=>n.id).filter(n=>n!==w.nat&&VTREE(n).some(v=>v.dom===dom)); this.enemyNat=t1?t1.v.nat:nats[Math.floor(Math.random()*nats.length)];
     const pv=VEHICLES[id]; this.maxTier=Math.max(pv.tier,...plan.map(p=>p.v.tier));
     this.player=this.spawnUnit(pv,0,true); this.player.stats=this.stats;
@@ -5561,8 +5598,16 @@ const VWar={
     u.rad=v.dom==='land'?Math.max(v.L,v.W)*.55:v.L*.5;
     if(v.dom==='land') u.pos.y=W.hAt(u.pos.x,u.pos.z);
     if(!old) this.units.push(u);
+    this.initCrewShell(u,isPlayer);
     this.place(u,0); return u;
   },
+  initCrewShell(u,isPlayer){ const v=u.v; u.crewMax=v.crewN||(v.dom==='land'?4:0); u.crew=u.crewMax; u.barrelT=0; u.repairing=0; u.spottedT=0; u.ranged=0; u.scoutCd=0; u.flameT=u.fireT||0;
+    if(v.dom==='land'&&v.gun&&!v.gun.auto){ let L=(isPlayer&&!this.net)?VSave.shellsFor(v.id):(v.gun.shells||[]); if(!L||!L.length) L=v.gun.shells||[]; u.shellList=L; u.shellI=0; u.shell=L[0]; }
+    else { u.shellList=null; u.shell=null; }
+    if(isPlayer&&!this.net){ u.pEngine=VSave.perk(v.id,'engine'); u.pTracks=VSave.perk(v.id,'tracks'); u.pOptics=VSave.perk(v.id,'optics'); u.pParts=VSave.perk(v.id,'parts'); }
+    else { u.pEngine=u.pTracks=u.pOptics=u.pParts=false; }
+  },
+  crewRl(u){ const dead=(u.crewMax||4)-(u.crew==null?u.crewMax||4:u.crew); return (1+.3*Math.max(0,dead))*(u.pParts?.9:1); },
   spawnAir(v,team,pos,yaw,owner,target,kind){
     const m=new THREE.Group(), inner=v.cls==='jet'?VM3.jet(v):VM3.heli(v); inner.rotation.y=-Math.PI/2; m.add(inner); this.scene.add(m);
     const u={id:this.uid++,team,v,dom:'air',air:true,alive:true,hp:v.hp,maxHp:v.hp,pos:pos.clone(),dir:vfwd(yaw),speed:v.cls==='jet'?60:10,model:m,inner,owner,target,state:'takeoff',st:0,name:v.name,kills:0,rad:9,rl:0,rl2:0,
@@ -5571,7 +5616,7 @@ const VWar={
   },
   enemies(u){ return this.units.filter(o=>o.alive&&o.team!==u.team); },
   visible(u,o){ // can u see o?
-    if(!o.alive) return false; const d=u.pos.distanceTo(o.pos);
+    if(!o.alive) return false; if(o.spottedT>0&&o.team!==u.team) return true; const d=u.pos.distanceTo(o.pos);
     if(o.dom==='sea'&&o.depth>0){ const sonar=this.units.some(a=>a.alive&&a.team===u.team&&(a.v.cls==='dd'||a.v.cls==='boat'||(a.air&&a.v.cls==='heli'))&&a.pos.distanceTo(o.pos)<800); return sonar||d<(o.depth===1?500:150); }
     if(this.dom==='land'&&!o.air&&!u.air){ if(d>1400) return false; return this.losLand(u.pos,o.pos); }
     return d<(o.air?6000:9000);
@@ -5617,7 +5662,9 @@ const VWar={
     for(const u of this.units){ if(!u.alive){ if(u.sinkT>0){ u.sinkT-=dt; this.place(u,dt); if(Math.random()<.3) VFX.spawn('dark',u.pos.x+(Math.random()-.5)*u.v.L*.5,6,u.pos.z+(Math.random()-.5)*u.v.B,0,6,0,{scale:2}); if(u.sinkT<=0) u.model.visible=false; }
         if(!u.air&&!u.isPlayer){ if(u.respT>0) u.respT-=dt; if(u.respT<=0){ if(!u.human) this.respawn(u); else if(u.wantV){ const nv=VEHICLES[u.wantV]; u.wantV=null; this.respawn(u,nv); } } } continue; }
       if(u.prot>0) u.prot-=dt;
-      if(u.ai) this.ai(u,dt); else if(u.human&&u.fireHeld&&!u.fly&&this.t-(u.inT||0)<1) this.firePrimary(u);
+      if(u.scoutCd>0) u.scoutCd-=dt; if(u.spottedT>0) u.spottedT-=dt;
+      if(!u.air&&u.repairing>0){ this.repairTick(u,dt); u.thr=0; }
+      if(u.ai) this.ai(u,dt); else if(u.human&&u.fireHeld&&!u.fly&&!u.repairing&&this.t-(u.inT||0)<1) this.firePrimary(u);
       if(u.air) this.moveAir(u,dt); else if(u.dom==='land') this.moveTank(u,dt); else this.moveShip(u,dt);
       this.aimUnit(u,dt); this.place(u,dt); this.dots(u,dt);
     }
@@ -5642,24 +5689,30 @@ const VWar={
     const u=this.ctrl, P=this.player; if(!P||this.ended) return;
     if(code==='KeyV'&&this.mode!=='sb'){ this.view3=!this.view3; }
     if(!P.alive) return;
-    if(this.client){ const k={KeyQ:'q',Digit2:'q',KeyG:'q',KeyE:'e',Digit3:'e',KeyC:'c',KeyF:'f'}[code]; if(k) Net.send({t:'vk',k}); return; }
-    if(code==='KeyQ'||code==='Digit2'||code==='KeyG') this.fireSecondary(P);
-    if(code==='KeyE'||code==='Digit3') this.fireTertiary(P);
-    if(code==='KeyC') this.dive(P);
-    if(code==='KeyF') this.toggleFly(P);
+    const act=VSave.keyAct(code);
+    if(this.client){ const k={sec:'q',ter:'e',dive:'c',fly:'f',shell:'x',scout:'b',range:'g',repair:'r'}[act]; if(k) Net.send({t:'vk',k}); return; }
+    if(act==='sec') this.fireSecondary(P);
+    else if(act==='ter') this.fireTertiary(P);
+    else if(act==='dive') this.dive(P);
+    else if(act==='fly') this.toggleFly(P);
+    else if(act==='shell') this.cycleShell(P);
+    else if(act==='scout') this.scout(P);
+    else if(act==='range') this.rangefind(P);
+    else if(act==='repair') this.repairStart(P);
   },
   /* ---------- weapons ---------- */
   muzzle(u,i=0){ const ud=u.model.userData, p=new THREE.Vector3(), q=new THREE.Quaternion(); const tip=ud.muzzles[i%ud.muzzles.length]; tip.getWorldPosition(p); ud.gunPivot.getWorldQuaternion(q); return {p,d:new THREE.Vector3(1,0,0).applyQuaternion(q)}; },
   firePrimary(u){
-    if(!u.alive||u.rl>0) return; const v=u.v, ab=this.mode==='ab';
+    if(!u.alive||u.rl>0||u.repairing>0) return; const v=u.v, ab=this.mode==='ab';
     if(u.dom==='land'){
+      if(u.barrelT>0){ if(u.isPlayer&&this.t-(u._bt||0)>1.5){ this._bt=this.t; this.tell(u,'Laras rusak — tekan R untuk perbaiki.'); } return; }
       const g=v.gun; if(g.auto){ if(!g.barrels) return this.fireSecondary(u); if(u.ammo.belt<=0){ u.rl=6; u.ammo.belt=g.belt; this.tell(u,'Mengisi ulang sabuk peluru…'); return; }
         u.barrelI=(u.barrelI||0)+1; const m=this.muzzle(u,u.barrelI); m.d.x+=(Math.random()-.5)*.012; m.d.y+=(Math.random()-.5)*.012; m.d.z+=(Math.random()-.5)*.012; u.ammo.belt--; u.rl=g.rl/Math.max(1,g.barrels)*2;
         this.shots.push({p:m.p,v:m.d.normalize().multiplyScalar(g.v0),o:u,pen:g.pen,dmg:g.dmg,cal:g.cal,life:3.2,he:true,aa:true,trace:u.barrelI%2===0});
         if(u.barrelI%2===0){ VFX.spawn('flash',m.p.x,m.p.y,m.p.z,0,0,0,{scale:.25}); Sound.play('lmg',u.isPlayer?null:u.pos,u.isPlayer?.5:.8); } return; }
-      const m=this.muzzle(u); u.rl=g.rl*(ab?.8:1);
+      const sh=u.shell||(g.shells&&g.shells[0])||g; const m=this.muzzle(u); u.rl=g.rl*(ab?.8:1)*this.crewRl(u);
       const d=m.d; if(!u.isPlayer){ d.x+=(Math.random()-.5)*.004; d.y+=(Math.random()-.5)*.004; }
-      this.shots.push({p:m.p,v:d.clone().normalize().multiplyScalar(g.v0),o:u,pen:g.pen,dmg:g.dmg,cal:g.cal,life:6,trace:true});
+      this.shots.push({p:m.p,v:d.clone().normalize().multiplyScalar(sh.v0),o:u,pen:sh.pen,dmg:sh.dmg,cal:g.cal,life:6,trace:true,he:sh.kind==='he',heat:!!sh.heat,splash:sh.splash,shKind:sh.kind});
       VFX.spawn('flash',m.p.x,m.p.y,m.p.z,0,0,0,{scale:g.cal/60}); VFX.burst('smoke',m.p,3,4,{scale:g.cal/160,a:.5}); VFX.burst('dust',{x:u.pos.x+d.x*4,y:u.pos.y+.4,z:u.pos.z+d.z*4},4,4,{up:true,scale:.6,a:.5});
       Sound.play('sniper',u.isPlayer?null:u.pos,1.2); Sound.play('boom',u.isPlayer?null:u.pos,.35); u.kick=1; if(u.isPlayer) this.shake=.5;
     } else if(u.dom==='sea'){
@@ -5693,7 +5746,7 @@ const VWar={
     if(!u.alive||u.rl3>0) return;
     if(u.hangar) return this.launchAir(u,'heli');
     if(u.dom==='sea'&&u.ammo.dc>0){ u.ammo.dc-=2; u.rl3=6; const f=vfwd(u.yaw); for(const s of [-1,1]){ const p=new THREE.Vector3(u.pos.x-f.x*u.v.L*.45+f.z*s*8,0,u.pos.z-f.z*u.v.L*.45-f.x*s*8); setTimeout(()=>{ if(!this.on) return; VFX.splash(p,5); VFX.explosion({x:p.x,y:1,z:p.z},3,{water:true}); Sound.play('boom',p,1); for(const o of this.units){ if(o.alive&&o.dom==='sea'&&o.team!==u.team&&o.depth>0){ const d=Math.hypot(o.pos.x-p.x,o.pos.z-p.z); if(d<90) this.damage(o,650*(1-d/90),u,'bom laut'); } } },2600); VFX.splash(p,1.5); } this.tell(u,'Bom laut dijatuhkan.'); return; }
-    if(u.dom==='land'){ const hu=u.isPlayer||u.human; if(hu&&u.airCd>0){ this.tell(u,'Dukungan udara siap dalam '+Math.ceil(u.airCd)+' dtk.'); return; } if(hu) u.airCd=75; u.rl3=30; this.airStrike(u.team,u.aim.clone(),u); this.tell(u,'Dukungan udara dipanggil ke titik bidik.'); return; }
+    if(u.dom==='land'){ if(this.noAir){ if(u.isPlayer||u.human) this.tell(u,'Dukungan udara dimatikan di pertandingan ini.'); return; } const hu=u.isPlayer||u.human; if(hu&&u.airCd>0){ this.tell(u,'Dukungan udara siap dalam '+Math.ceil(u.airCd)+' dtk.'); return; } if(hu) u.airCd=75; u.rl3=30; this.airStrike(u.team,u.aim.clone(),u); this.tell(u,'Dukungan udara dipanggil ke titik bidik.'); return; }
     this.tell(u,'Tidak ada senjata ketiga.');
   },
   launch(u,p,d,target,o){ if(this.net) VNet.push(['l',Math.round(p.x),Math.round(p.y),Math.round(p.z)]); this.msl.push(Object.assign({id:this.uid++,p:p.clone(),d:d.clone().normalize(),o:u,target,t:0,cur:o.spd*.35},o)); VFX.burst('smoke',p,6,6,{scale:1}); VFX.spawn('flash',p.x,p.y,p.z,0,0,0,{scale:1.2}); Sound.play('rpg',u.isPlayer?null:p,1); },
@@ -5731,7 +5784,7 @@ const VWar={
   },
   /* ---------- movement ---------- */
   moveTank(u,dt){
-    const v=u.v, W=this.world, ab=this.mode==='ab', max=v.spd*(ab?1.15:1)*u.engine*(u.trackT>0?0:1), slope=u.slope||0;
+    const v=u.v, W=this.world, ab=this.mode==='ab', max=v.spd*(ab?1.15:1)*(u.pEngine?1.12:1)*u.engine*(u.trackT>0?0:1), slope=u.slope||0;
     if(u.trackT>0) u.trackT-=dt;
     const target=u.thr*max*(u.thr<0?.45:1)*Math.max(.35,1-Math.max(0,slope)*1.6), acc=(ab?7:this.mode==='rb'?4.2:3.6)*(u.thr&&Math.sign(u.thr)!==Math.sign(u.speed)&&Math.abs(u.speed)>1?2.2:1);
     u.speed+=Math.max(-acc*dt,Math.min(acc*dt,target-u.speed)); if(!u.thr) u.speed*=Math.max(0,1-dt*1.8);
@@ -5862,13 +5915,15 @@ const VWar={
       let cos=1; if(h.ld){ let n=f==='front'?[-1,0,0]:f==='rear'?[1,0,0]:f==='top'?[0,-1,0]:[0,0,-Math.sign(h.ld.z)||1]; if(f==='side') n=[0,0,h.ld.z>0?1:-1]; cos=Math.abs(h.ld.x*n[0]+h.ld.y*n[1]+h.ld.z*n[2]); if(f==='front'&&!T) cos*=.8; }
       // turret rotated relative to the hull: use the true relative angle
       if(T){ const rel=vwrap(Math.atan2(-h.ld.z,h.ld.x)-u.tyaw); const c=Math.abs(Math.cos(rel)); th=c>.7?(Math.cos(rel)<0?arm[0]:arm[2]):arm[1]; cos=Math.max(c,Math.abs(Math.sin(rel))); }
-      const eff=th/Math.max(.2,cos), dist=s.p.distanceTo(s.o.pos), pen=s.pen*(s.he?1:Math.max(.6,1-dist/4500));
+      const eff=th/Math.max(.2,cos), dist=s.p.distanceTo(s.o.pos), pen=s.heat?s.pen:s.pen*(s.he?1:Math.max(.6,1-dist/4500));
       if(cos<.34&&!s.he&&eff>pen*.5){ dmg=0; note='MEMANTUL'; VFX.burst('spark',h.p,10,14,{up:true}); Sound.play('impact',h.p,1); }
       else if(pen<eff){ dmg*=s.he?.12:(ab?.15:.04); note='TIDAK TEMBUS'; VFX.burst('spark',h.p,8,10,{up:true}); VFX.explosion(h.p,.5); Sound.play('impact',h.p,1); }
       else { dmg*=Math.min(1.6,.8+(pen-eff)/pen*.6); const r=Math.random();
-        if(!T&&h.lp&&h.lp.y<.9&&f==='side'&&r<.5){ u.trackT=ab?4:7; note='RANTAI PUTUS'; }
+        if(T&&r<.3&&u.barrelT<=0){ u.barrelT=ab?6:11; note='LARAS RUSAK'; }
+        else if(!T&&h.lp&&h.lp.y<.9&&f==='side'&&r<.5){ u.trackT=ab?4:7; note='RANTAI PUTUS'; }
         else if(r<(f==='rear'?.4:.1)){ u.engine=.5; u.fireT=8; note='MESIN TERBAKAR'; }
         else if(r>(T?.86:.9)){ dmg*=2.6; note='AMUNISI MELEDAK'; }
+        if(u.crewMax&&Math.random()<(T?.3:.45)){ u.crew=Math.max(0,(u.crew==null?u.crewMax:u.crew)-1); if(!note) note='AWAK TEWAS'; if(u.crew<=0){ note='AWAK HABIS'; this.kill(u,s.o,note); } }
         VFX.explosion(h.p,Math.max(.7,s.cal/90)); Sound.play('boom',h.p,.9); }
     } else {
       const plunging=h.face==='top'||(h.ld&&h.ld.y<-.5), th=plunging?u.v.arm.deck:u.v.arm.belt, pen=s.pen*(s.he?1.2:1);
@@ -5888,6 +5943,11 @@ const VWar={
   dots(u,dt){ if(u.air) return; if(u.fireT>0){ u.fireT-=dt; u.hp-=u.maxHp*(u.dom==='land'?.012:.006)*dt; if(Math.random()<dt*10) VFX.spawn(Math.random()<.4?'fire':'dark',u.pos.x+(Math.random()-.5)*u.rad*.6,u.pos.y+(u.dom==='land'?2.2:(u.model.userData.deckY||6)+2),u.pos.z+(Math.random()-.5)*u.rad*.3,0,3,0,{scale:u.dom==='land'?.8:2}); if(u.fireT<=0&&u.engine<1&&this.mode==='ab') u.engine=1; if(u.hp<=0) this.kill(u,u.lastBy,'terbakar'); }
     else if(u.hp<u.maxHp*.35&&Math.random()<dt*4) VFX.spawn('dark',u.pos.x,u.pos.y+(u.dom==='land'?2.2:(u.model.userData.deckY||6)+4),u.pos.z,0,2.5,0,{scale:u.dom==='land'?.7:2.2,a:.6});
     if(this.mode==='ab'&&u.hp<u.maxHp&&u.fireT<=0) u.hp=Math.min(u.maxHp,u.hp+u.maxHp*.004*dt); },
+  repairStart(u){ if(u.air||!u.alive) return; const dmg=u.barrelT>0||u.trackT>0||u.engine<1||u.fireT>0||(u.crewMax&&u.crew<u.crewMax); if(!dmg){ this.tell(u,'Tidak ada yang perlu diperbaiki.'); return; } if(Math.abs(u.speed)>2){ this.tell(u,'Berhenti dulu untuk memperbaiki.'); return; } u.repairing=u.repairing>0?0:(u.pParts?5:8); if(u.repairing>0) this.tell(u,'Memperbaiki… tetap diam.'); },
+  repairTick(u,dt){ if(Math.abs(u.speed)>2){ return; } u.repairing-=dt; if(u.repairing<=0){ u.repairing=0; u.barrelT=0; u.trackT=0; u.engine=1; u.fireT=0; if(u.crewMax&&u.crew<u.crewMax&&u.pParts) u.crew=Math.min(u.crewMax,u.crew+1); this.tell(u,'Perbaikan selesai.'); } },
+  cycleShell(u){ if(!u.shellList||u.shellList.length<2) return; u.shellI=(u.shellI+1)%u.shellList.length; u.shell=u.shellList[u.shellI]; this.tell(u,'Peluru: '+u.shell.name); },
+  scout(u){ if(u.scoutCd>0) return; u.scoutCd=6; const en=this.enemies(u).filter(o=>!o.air&&u.pos.distanceTo(o.pos)<(u.pOptics?2600:1800)); let n=0; for(const o of en){ o.spottedT=12; n++; } this.tell(u,n?'Menandai '+n+' musuh untuk tim.':'Tidak ada musuh dalam jangkauan teropong.'); if(u.isPlayer) Sound.play('ui',null,.4); },
+  rangefind(u){ u.ranged=u.pos.distanceTo(u.aim); this.tell(u,'Jarak terukur: '+Math.round(u.ranged)+' m.'); if(u.isPlayer) Sound.play('ui',null,.3); },
   kill(u,by,note){
     if(!u.alive) return; u.alive=false; u.hp=0; const P=this.player, who=by&&(by.air&&by.owner?by.owner:by), mine=who&&who.stats&&who!==u;
     VFX.explosion({x:u.pos.x,y:u.pos.y+(u.air?0:2),z:u.pos.z},u.air?2:u.dom==='land'?2.6:5); Sound.play('boom',u.isPlayer?null:u.pos,1.6);
@@ -6016,6 +6076,13 @@ const VHud={
     $('vwEScore').textContent=`Tiket ${Math.max(0,Math.round(VWar.tickets[VWar.player.team]))} : ${Math.max(0,Math.round(VWar.tickets[1-VWar.player.team]))} · hancurkan ${S.kills} · rebut ${S.caps} titik · hancur ${S.deaths}×`;
     $('vwERew').innerHTML=`<div class="rw p"><span class="muted">RISET ${esc(VN[VSave.p.nat].short)}</span><b>+${rp} RP</b></div><div class="rw g"><span class="muted">GOLD</span><b>+${gold}</b></div><div class="rw b"><span class="muted">TOTAL RP</span><b>${VSave.rp(VSave.p.nat)}</b></div>`; },
   /* ---------- per-frame drawing ---------- */
+  modPanel(g,txt,F,P,bx,by,small){
+    const mods=[['LARAS',P.barrelT>0],['RANTAI',P.trackT>0],['MESIN',P.engine<1],['API',P.fireT>0]];
+    let x=bx, y=by-20; F(11,700);
+    for(const [nm,bad] of mods){ const w=nm.length*7+12; g.fillStyle=bad?'rgba(220,60,40,.85)':'rgba(40,52,46,.7)'; g.fillRect(x,y,w,16); txt(nm,x+6,y+12,bad?'#fff':'#8c968f'); x+=w+4; }
+    const cm=P.crewMax||0; if(cm){ const c=P.crew==null?cm:P.crew, col=c>=cm?'#4fd27a':c>1?'#ffc21a':'#ff4a4a'; const w=58; g.fillStyle='rgba(20,26,22,.8)'; g.fillRect(x,y,w,16); txt('AWAK '+c+'/'+cm,x+6,y+12,col); x+=w+4; }
+    if(P.repairing>0){ const pct=Math.round((1-P.repairing/(P.pParts?5:8))*100); F(12,700); txt('MEMPERBAIKI '+pct+'%',bx,by-30,'#ffd23a'); }
+  },
   proj(p){ const v=p.clone().project(VWar.cam); return {x:(v.x*.5+.5)*innerWidth,y:(-v.y*.5+.5)*innerHeight,ok:v.z<1&&v.z>-1}; },
   draw(dt){
     const g=this.g, W=innerWidth, H=innerHeight, V=VWar, P=V.player, u=V.ctrl&&V.ctrl.alive?V.ctrl:P, sb=V.mode==='sb', ab=V.mode==='ab'; g.setTransform(this.dpr,0,0,this.dpr,0,0); g.clearRect(0,0,W,H);
@@ -6056,9 +6123,12 @@ const VHud={
     const small=W<900||H<500, bx=12, by=H-(small?150:96);
     if(P.alive){ g.fillStyle='rgba(0,0,0,.5)'; g.fillRect(bx,by,small?190:250,small?56:84); F(small?12:14,700); txt(P.v.name,bx+8,by+18,'#fff'); g.fillStyle='#30363b'; g.fillRect(bx+8,by+26,(small?174:234),9); const hk=P.hp/P.maxHp; g.fillStyle=hk>.5?'#4fd27a':hk>.25?'#ffc21a':'#ff4a4a'; g.fillRect(bx+8,by+26,(small?174:234)*Math.max(0,hk),9);
       F(12); const kmh=Math.abs(P.speed)*3.6, sp=P.dom==='sea'?(Math.abs(P.speed)*1.944).toFixed(0)+' knot':Math.round(kmh)+' km/j'; txt(`${Math.round(P.hp)} / ${P.maxHp}  ·  ${sp}`,bx+8,by+50,'#e8eef2');
-      if(!small){ let st=P.dom==='sea'?('Mesin: '+(P.thr<0?'MUNDUR':['STOP','1/4','1/2','3/4','PENUH'][Math.round(Math.max(0,P.thr)*4)])+(P.v.cls==='ss'?' · '+['PERMUKAAN','PERISKOP','SELAM DALAM'][P.depth]:'')):(P.trackT>0?'RANTAI PUTUS, sedang diperbaiki…':P.engine<1?'MESIN RUSAK':''); if(P.fireT>0) st+=(st?' · ':'')+'KEBAKARAN'; txt(st,bx+8,by+70,P.fireT>0||P.trackT>0?'#ffb84a':'#cfd6dc'); } }
+      if(!small){ let st=P.dom==='sea'?('Mesin: '+(P.thr<0?'MUNDUR':['STOP','1/4','1/2','3/4','PENUH'][Math.round(Math.max(0,P.thr)*4)])+(P.v.cls==='ss'?' · '+['PERMUKAAN','PERISKOP','SELAM DALAM'][P.depth]:'')):''; if(P.fireT>0) st+=(st?' · ':'')+'KEBAKARAN'; txt(st,bx+8,by+70,P.fireT>0?'#ffb84a':'#cfd6dc'); } }
+    if(P.alive&&P.dom==='land'){ this.modPanel(g,txt,F,P,bx,by,small); }
+    // rangefinder / scouting cue
+    if(P.alive&&!sb){ if(P.ranged>0){ F(12); txt('JARAK TERUKUR '+Math.round(P.ranged)+' m',W/2,96,'#7dff8a','center'); } }
     // weapons
-    const ws=[]; if(P.alive){ if(P.dom==='land'){ const gn=P.v.gun; if(gn.barrels!==0||!gn.auto) ws.push(['KLIK',gn.cal+' mm'+(gn.auto?' otomatis':''),gn.auto?P.ammo.belt:'',P.rl,gn.auto?6:gn.rl]); if(P.v.samN) ws.push(['Q','Rudal SAM',P.ammo.sam,P.rl2,3]); if(P.v.atgmN) ws.push(['Q','Rudal ATGM',P.ammo.atgm,P.rl2,9]); ws.push(['E','Dukungan udara','',P.airCd,75]); }
+    const ws=[]; if(P.alive){ if(P.dom==='land'){ const gn=P.v.gun; const sh=P.shell; if(gn.barrels!==0||!gn.auto) ws.push(['KLIK',gn.cal+' mm'+(gn.auto?' otomatis':sh?' · '+sh.name:''),gn.auto?P.ammo.belt:(P.barrelT>0?'LARAS RUSAK':''),P.rl,gn.auto?6:gn.rl]); if(P.shellList&&P.shellList.length>1) ws.push(['X','Ganti peluru',P.shell?P.shell.name:'',0,1]); ws.push(['B','Teropong (tandai musuh)','',P.scoutCd,6]); ws.push(['R','Perbaiki modul',P.repairing>0?'…':'',0,1]); if(P.v.samN) ws.push(['Q','Rudal SAM',P.ammo.sam,P.rl2,3]); if(P.v.atgmN) ws.push(['Q','Rudal ATGM',P.ammo.atgm,P.rl2,9]); if(!V.noAir) ws.push(['E','Dukungan udara','',P.airCd,75]); }
       else { const mg=P.turrets.filter(T=>!T.t.spec.sec); if(mg.length){ const rdy=mg.filter(T=>T.rl<=0).length; ws.push(['KLIK',mg[0].t.spec.cal+' mm ×'+mg.reduce((a,T)=>a+T.t.spec.n,0),rdy+'/'+mg.length+' siap',Math.min(...mg.map(T=>T.rl)),mg[0].t.spec.rl]); }
         if(P.hangar){ ws.push(['Q','Luncurkan JET',P.hangar.jet,P.rl2,7]); ws.push(['E','Luncurkan HELIKOPTER',P.hangar.heli,P.rl3,7]); ws.push(['F','Terbangkan pesawat','',0,1]); }
         else { if(P.v.asm) ws.push(['Q','Rudal anti-kapal',P.ammo.asm,P.rl2,10]); else if(P.v.torp) ws.push(['Q','Torpedo',P.ammo.torp,P.rl2,P.v.cls==='ss'?14:20]); if(P.v.cls==='dd'||P.v.cls==='boat') ws.push(['E','Bom laut',P.ammo.dc,P.rl3,6]); if(P.v.cls==='ss') ws.push(['C','Menyelam / naik','',0,1]); } } }
@@ -6107,7 +6177,7 @@ const VNet={
         if(u.fly){ u.fireHeld=false; break; }
         u.thr=cl(d.th,u.dom==='sea'?-.5:-1,1); u.steer=cl(d.sr,-1,1); u.fireHeld=!!d.f;
         if(Array.isArray(d.a)) u.aim.set(cl(d.a[0],-2e4,2e4),cl(d.a[1],-500,5000),cl(d.a[2],-2e4,2e4)); break;
-      case 'vk': if(!u.alive||V.ended) break; if(d.k==='q') V.fireSecondary(u); else if(d.k==='e') V.fireTertiary(u); else if(d.k==='c') V.dive(u); else if(d.k==='f') V.toggleFly(u); break;
+      case 'vk': if(!u.alive||V.ended) break; if(d.k==='q') V.fireSecondary(u); else if(d.k==='e') V.fireTertiary(u); else if(d.k==='c') V.dive(u); else if(d.k==='f') V.toggleFly(u); else if(d.k==='x') V.cycleShell(u); else if(d.k==='b') V.scout(u); else if(d.k==='g') V.rangefind(u); else if(d.k==='r') V.repairStart(u); break;
       case 'vresp': { const v=VEHICLES[d.v]; if(!u.alive&&v&&v.dom===V.dom) u.wantV=v.id; break; }
       case 'vquit': this.toBot(c); break;
     }
@@ -6118,13 +6188,13 @@ const VNet={
     return {t:'vs',tl:vr1(V.timeLeft),tk:[vr1(V.tickets[0]),vr1(V.tickets[1])],z:W.zones.map(z=>[z.own,r2(z.prog)]),en:V.ended?1:0,
       u:V.units.filter(u=>u.alive||!u.air).map(u=>u.air
         ?{i:u.id,v:u.v.id,tm:u.team,a:1,h:Math.round(u.hp),p:[vr1(u.pos.x),vr1(u.pos.y),vr1(u.pos.z)],d:[vr3(u.dir.x),vr3(u.dir.y),vr3(u.dir.z)],s:vr1(u.speed),b:r2(u.bank),o:u.owner?u.owner.id:0,n:u.name,st:u.strike?1:0}
-        :{i:u.id,v:u.v.id,tm:u.team,a:u.alive?1:0,h:Math.round(u.hp),p:[vr1(u.pos.x),vr1(u.pos.z)],y:vr3(u.yaw),s:vr1(u.speed),ty:vr3(u.tyaw),g:vr3(u.gp),dp:u.depth|0,f:(u.fireT>0?1:0)|(u.prot>0?2:0)|(u.human||u.isPlayer?4:0),k:u.kills,n:u.name,sl:u.slotN|0,
+        :{i:u.id,v:u.v.id,tm:u.team,a:u.alive?1:0,h:Math.round(u.hp),p:[vr1(u.pos.x),vr1(u.pos.z)],y:vr3(u.yaw),s:vr1(u.speed),ty:vr3(u.tyaw),g:vr3(u.gp),dp:u.depth|0,f:(u.fireT>0?1:0)|(u.prot>0?2:0)|(u.human||u.isPlayer?4:0)|(u.spottedT>0?8:0),k:u.kills,n:u.name,sl:u.slotN|0,
           tu:u.turrets?[].concat(...u.turrets.filter(T=>!T.t.spec.sec).map(T=>[vr3(T.cur),vr3(T.el)])):undefined}),
       ms:V.msl.map(m=>[m.id,vr1(m.p.x),vr1(m.p.y),vr1(m.p.z),vr3(m.d.x),vr3(m.d.y),vr3(m.d.z),Math.round(m.cur)]),
       tp:V.torps.map(t=>[t.id||(t.id=V.uid++),vr1(t.p.x),vr1(t.p.z),vr3(t.d.x),vr3(t.d.z),t.spd])};
   },
   me(u){ const p=v=>r2(Math.max(0,v||0)), S=u.stats;
-    return {rl:p(u.rl),rl2:p(u.rl2),rl3:p(u.rl3),am:u.ammo,hg:u.hangar||null,ac:vr1(Math.max(0,u.airCd||0)),tk:p(u.trackT),en:u.engine,rs:u.alive?0:vr1(Math.max(0,u.respT||0)),fly:u.fly?u.fly.id:0,
+    return {rl:p(u.rl),rl2:p(u.rl2),rl3:p(u.rl3),am:u.ammo,hg:u.hangar||null,ac:vr1(Math.max(0,u.airCd||0)),tk:p(u.trackT),en:u.engine,rs:u.alive?0:vr1(Math.max(0,u.respT||0)),fly:u.fly?u.fly.id:0,cr:u.crew==null?0:u.crew,cm:u.crewMax|0,bt:p(u.barrelT),rep:p(u.repairing),si:u.shellI|0,shn:u.shellList?u.shellList.map(x=>x.name):null,rg:p(u.ranged),sc:p(u.scoutCd),
       st:{kills:S.kills,caps:S.caps,dmg:Math.round(S.dmg),deaths:S.deaths},n:u.nq.splice(0),
       tr:u.turrets?u.turrets.filter(T=>!T.t.spec.sec).map(T=>[p(T.rl),T.ok?1:0,Math.round(T.range||0)]):undefined}; },
   flush(){ const base=this.snap(); base.ev=this.ev; this.ev=[];
@@ -6139,7 +6209,7 @@ const VNet={
   clientInput(dt){ this.inT-=dt; if(this.inT>0) return; this.inT=1/15; const V=VWar, P=V.player; if(!P) return;
     Net.send({t:'vin',th:r2(P.thr),sr:r2(P.steer),a:[vr1(P.aim.x),vr1(P.aim.y),vr1(P.aim.z)],f:Game.mouse.l&&!V.paused?1:0,cy:vr3(V.camYaw),cp:vr3(V.camPitch)}); },
   build(u,v){ const V=VWar; if(u.model) V.scene.remove(u.model);
-    Object.assign(u,{v,dom:v.dom,alive:true,maxHp:v.hp,sinkT:0,depthY:null,engine:1,trackT:0,fireT:0,snapPos:true,rl:0,rl2:0,rl3:0,
+    Object.assign(u,{v,dom:v.dom,alive:true,maxHp:v.hp,sinkT:0,depthY:null,engine:1,trackT:0,fireT:0,barrelT:0,repairing:0,spottedT:0,ranged:0,scoutCd:0,crewMax:v.crewN||(v.dom==='land'?4:0),crew:v.crewN||(v.dom==='land'?4:0),shellList:null,shell:null,snapPos:true,rl:0,rl2:0,rl3:0,
       hangar:v.wing?Object.assign({},v.wing):null,ammo:{atgm:0,sam:0,torp:0,asm:0,dc:0,belt:0}});
     u.model=v.dom==='land'?VM3.tank(v,V.biome==='gurun'?'desert':V.biome==='salju'?'snow':'base'):VM3.ship(v); V.scene.add(u.model);
     u.turrets=v.dom==='sea'?u.model.userData.turrets.map(t=>({t,cur:0,el:0,nc:0,ne:0,rl:0,ok:false})):null;
@@ -6159,7 +6229,7 @@ const VNet={
       if(!u){ u=this.make(s,v); V.byId.set(s.i,u); V.units.push(u); }
       if(u.air){ u.net={x:s.p[0],y:s.p[1],z:s.p[2],t:V.t}; u.nd.set(s.d[0],s.d[1],s.d[2]); u.speed=s.s; u.bank=s.b; u.hp=s.h; if(!u.owner&&s.o) u.owner=V.byId.get(s.o)||null; continue; }
       if(u.v!==v||(s.a&&!u.alive)){ this.build(u,v); if(u===P0){ VHud.deathHide(); VHud.waitResp=false; V.ctrl=u; V.camYaw=s.y; } }
-      u.hp=s.h; u.net={x:s.p[0],z:s.p[1],yaw:s.y,t:V.t}; u.speed=s.s; u.nty=s.ty; u.ngp=s.g; u.depth=s.dp|0; u.fireT=s.f&1?1:0; u.prot=s.f&2?1:0; u.kills=s.k|0; u.name=s.n; u.human=!!(s.f&4);
+      u.hp=s.h; u.net={x:s.p[0],z:s.p[1],yaw:s.y,t:V.t}; u.speed=s.s; u.nty=s.ty; u.ngp=s.g; u.depth=s.dp|0; u.fireT=s.f&1?1:0; u.prot=s.f&2?1:0; u.kills=s.k|0; u.name=s.n; u.human=!!(s.f&4); u.spottedT=s.f&8?12:0;
       if(s.tu&&u.turrets){ let k=0; for(const T of u.turrets){ if(T.t.spec.sec) continue; T.nc=+s.tu[k++]||0; T.ne=+s.tu[k++]||0; } }
       if(u.alive&&!s.a){ u.alive=false; V.wreck(u); }
     }
@@ -6170,7 +6240,7 @@ const VNet={
     sync(this.torp,d.tp,a=>({p:V3(a[1],-2.5,a[2]),d:V3(a[3],0,a[4]),cur:a[5],fix(b){ this.p.lerp(V3(b[1],-2.5,b[2]),.5); this.d.set(b[3],0,b[4]); this.cur=b[5]; }}));
     if(Array.isArray(d.ev)) for(const e of d.ev) this.play(e);
     const m=d.me, P=V.player;
-    if(m&&P){ P.rl=m.rl; P.rl2=m.rl2; P.rl3=m.rl3; if(m.am) P.ammo=m.am; P.hangar=m.hg||null; P.airCd=m.ac; P.trackT=m.tk; P.engine=m.en; V.respawnT=m.rs; if(m.st) Object.assign(V.stats,m.st);
+    if(m&&P){ P.rl=m.rl; P.rl2=m.rl2; P.rl3=m.rl3; if(m.am) P.ammo=m.am; P.hangar=m.hg||null; P.airCd=m.ac; P.trackT=m.tk; P.engine=m.en; V.respawnT=m.rs; P.crew=m.cr; P.crewMax=m.cm; P.barrelT=m.bt; P.repairing=m.rep; P.ranged=m.rg; P.scoutCd=m.sc; if(m.shn){ P.shellList=m.shn.map(nm=>({name:nm})); P.shellI=Math.min(m.si,P.shellList.length-1); P.shell=P.shellList[P.shellI]; } if(m.st) Object.assign(V.stats,m.st);
       if(m.tr&&P.turrets){ let k=0; for(const T of P.turrets){ if(T.t.spec.sec) continue; const a=m.tr[k++]; if(a){ T.rl=a[0]; T.ok=!!a[1]; T.range=a[2]; } } }
       const fl=m.fly?V.byId.get(m.fly):null;
       if(fl&&V.ctrl!==fl){ V.ctrl=fl; V.camYaw=Math.atan2(-fl.dir.z,fl.dir.x); V.camPitch=0; } else if(!fl&&V.ctrl!==P) V.ctrl=P;
@@ -6504,6 +6574,9 @@ const VLobby={
       if(d.vcoop){ w.coop=d.vcoop==='1'; } else if(d.vdom){ w.dom=d.vdom; } else if(d.vmode){ w.mode=d.vmode; } else if(d.vsize){ w.size=+d.vsize; } else if(d.vnat){ w.nat=d.vnat; this.look=null; }
       else if(d.vsel){ const v=VEHICLES[d.vsel]; this.look=d.vsel; if(VSave.unlocked(v.id)){ if(v.dom!=='air') { VSave.pick(v.id); w.dom=v.dom; } } }
       else if(d.vres){ const r=VSave.research(d.vres); if(r!=='ok') Game.toast(r); else { Game.toast(VEHICLES[d.vres].name+' selesai diriset'); Sound.play('buy',null,.6); const v=VEHICLES[d.vres]; if(v.dom!=='air') VSave.pick(v.id); this.look=v.id; } }
+      else if(d.vmod){ const tgt=this.modTarget; const r=VSave.researchMod(tgt,d.vmod); if(r!=='ok'&&r!=='x') Game.toast(r); else if(r==='ok'){ const m=VMODS(VEHICLES[tgt]).find(x=>x.id===d.vmod); Game.toast((m?m.name:'Modul')+' diriset'); Sound.play('buy',null,.6); } }
+      else if(d.vopt==='noair'){ w.noAir=!w.noAir; }
+      else if(d.vkey){ this.rebind(d.vkey); return; }
       else if(b.id==='vwPlay'){ Save.save(); VWar.start(); return; }
       Save.save(); Sound.play('ui',null,.4); this.render(); if(Net.role) Net.updateInfo(); });
     pane.addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.id==='vwCode') Net.join(e.target.value); });
@@ -6530,8 +6603,23 @@ const VLobby={
     h+=`<h3 style="margin-top:10px">PEMAIN DI ROOM (${list.length})</h3><div class="list">${list.map(row).join('')}</div>`;
     el.innerHTML=h;
   },
+  rebind(act){ if(this.rebinding){ return; } this.rebinding=act; this.renderSettings();
+    const h=e=>{ e.preventDefault(); e.stopPropagation(); const c=e.code; removeEventListener('keydown',h,true); this.rebinding=null;
+      if(c!=='Escape'){ VSave.setKey(act,c); Game.toast('Tombol diubah'); } this.renderSettings(); };
+    addEventListener('keydown',h,true); },
+  renderMods(){ const el=$('vwMods'), card=$('vwModsCard'); if(!el||!card) return; const w=VSave.p, id=this.modTarget=this.look&&VEHICLES[this.look]&&VEHICLES[this.look].nat===w.nat?this.look:VSave.sel(w.dom); const v=id&&VEHICLES[id];
+    if(!v||v.dom!=='land'){ card.style.display='none'; return; } card.style.display='';
+    const mods=VMODS(v), have=VSave.modList(id), shells=VSave.shellsFor(id);
+    el.innerHTML=`<p class="muted" style="font-size:12px;margin:0 0 8px">Peluru siap: <b>${shells.map(x=>esc(x.name)).join(', ')||'AP'}</b>. Riset modul pakai RP ${esc(N_(w.nat))} — gratis dipakai, tanpa biaya perbaikan.</p>`
+      +mods.map(m=>{ const done=have.includes(m.id), can=!done&&(w.rp[v.nat]|0)>=m.rp; return `<div class="vcard${done?' sel':''}" style="margin:6px 0"><div style="flex:1"><b>${esc(m.name)}</b><small>${esc(m.desc)}</small></div>${done?'<span class="badge">SELESAI</span>':`<button class="btn${can?' y':''}" data-vmod="${m.id}" ${can?'':'disabled'}>${m.rp} RP</button>`}</div>`; }).join('');
+  },
+  renderSettings(){ const el=$('vwSettings'); if(!el) return; const w=VSave.p, km=VSave.keyMap();
+    el.innerHTML=`<div class="chips" style="margin:0 0 10px"><button class="chip" data-vopt="noair" aria-pressed="${!w.noAir}" style="font-family:var(--f-ui)">DUKUNGAN UDARA: ${w.noAir?'MATI':'AKTIF'}</button></div>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">Gerak: <b>W A S D</b> · bidik: <b>mouse</b> · tembak: <b>klik kiri</b> · teropong: <b>klik kanan</b>. Sensitivitas atur di tab SETELAN. Klik tombol di bawah lalu tekan tombol baru (Esc batal).</p>
+      <div class="keys">${VSave.keyDefs().map(([a,def,lbl])=>`<kbd><button data-vkey="${a}" class="rebindk"${this.rebinding===a?' style="background:var(--hazard);color:#111"':''}>${this.rebinding===a?'tekan…':key_(km[a])}</button></kbd><span>${esc(lbl)}</span>`).join('')}</div>`;
+  },
   render(){
-    const pane=$('vwPane'); if(!pane||Lobby.tab!=='vw') return; const w=VSave.p, nat=w.nat, N=VN[nat]; this.renderNet();
+    const pane=$('vwPane'); if(!pane||Lobby.tab!=='vw') return; const w=VSave.p, nat=w.nat, N=VN[nat]; this.renderNet(); this.renderMods(); this.renderSettings();
     const selId=VSave.sel(w.dom), showId=this.look&&VEHICLES[this.look]&&VEHICLES[this.look].nat===nat?this.look:selId, sv=VEHICLES[showId];
     $('vwDoms').innerHTML=[['land','LAND WAR','Tank ringan, tank tempur utama, penghancur tank, anti-pesawat'],['sea','SEA WAR','Kapal cepat, perusak, penjelajah, kapal tempur, kapal selam, kapal induk']].map(([id,n,d])=>`<button class="mode" data-vdom="${id}" aria-pressed="${w.dom===id}"><b>${n}</b><p>${d}</p></button>`).join('');
     $('vwModes').innerHTML=Object.values(VMODES).map(m=>`<button class="mode" data-vmode="${m.id}" aria-pressed="${w.mode===m.id}"><span class="vs">${m.short}</span><b>${m.name}</b><p>${m.desc}</p></button>`).join('');
@@ -6571,7 +6659,10 @@ const VLobby={
     r.setScissorTest(true); r.setScissor(b.left,y,b.width,b.height); r.setViewport(b.left,y,b.width,b.height); r.setClearColor(0x10161c,1); r.clear(true,true,false); r.render(this.ps,this.pc); r.setClearColor(0x000000,1);
     if('outputColorSpace' in r) r.outputColorSpace=ocs; else r.outputEncoding=oe; r.toneMapping=tm; r.setScissorTest(false);
   }
+
 };
+function key_(c){ return String(c||'').replace(/^Key/,'').replace(/^Digit/,'').replace(/^Arrow/,'').replace('Mouse0','KLIK').replace('Mouse2','KANAN')||'—'; }
+function N_(nat){ return (typeof VN!=='undefined'&&VN[nat])?VN[nat].short:''; }
 /* ================= LIVE: developer updates without republishing + anonymous visitor analytics =================
    Talks ONLY to the developer's own database (Supabase URL + public anon key from jw-config.js).
    Nothing here contacts Claude or any AI service. Without jw-config.js the game simply runs as before.
