@@ -4,6 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>JUST WAR</title>
+<script>
+/* JUST WAR live config: database milik developer (Supabase project Just-War-2.0). Kunci publik ini aman di game. */
+window.JW_LIVE=window.JW_LIVE||{url:"https://rfrgbegmwndmxllrksts.supabase.co",key:"sb_publishable_rhA2jgJVGmN2DkIMq9sGjA_YKh9eTL7"};
+</script>
+<script>
+/* LIVE bootstrap: read the developer's live settings from the game's own database (Supabase, set in jw-config.js).
+   Never contacts Claude. Without jw-config.js the game runs normally. */
+(function(){
+  if(window.__JW_LIVE_CHILD) return;
+  var C=window.JW_LIVE;
+  if(!C||!C.url||!C.key){ window.__JW_LIVE_P=Promise.resolve(null); return; }
+  var h={apikey:C.key}; if(/^eyJ/.test(C.key)) h.Authorization='Bearer '+C.key;
+  var ctl=window.AbortController?new AbortController():null, t=setTimeout(function(){ if(ctl) ctl.abort(); },3500);
+  var cached=function(){ try{ var c=JSON.parse(localStorage.getItem('jw_live_row')||'null'); return c; }catch(e){ return null; } };
+  try{
+    window.__JW_LIVE_P=fetch(String(C.url).replace(/\/+$/,'')+'/rest/v1/jw_live?id=eq.1&select=version,config,html_ver,updated_at',{headers:h,cache:'no-store',signal:ctl&&ctl.signal})
+      .then(function(r){ return r.ok?r.json():Promise.reject(r.status); })
+      .then(function(a){ clearTimeout(t); var row=a&&a[0]||null; if(row) try{ localStorage.setItem('jw_live_row',JSON.stringify(row)); }catch(e){} return row; })
+      .catch(function(){ return cached(); });
+  }catch(e){ window.__JW_LIVE_P=Promise.resolve(cached()); }
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -829,7 +851,7 @@ const BOT_LINES = {
 };
 
 function costOf(o){ return o && o.cost ? o.cost : null; }
-function costLabel(c){ if(!c) return ''; if(c.gold) return c.gold+' Gold'; if(c.points) return c.points+' Poin'; return c.brill+' Diamond'; }
+function costLabel(c){ if(!c) return ''; const d=Live.cost(c), u=c.gold?' Gold':c.points?' Poin':' Diamond', o=c.gold||c.points||c.brill, v=d.gold||d.points||d.brill; return (v<o?'<s style="opacity:.6">'+o+'</s> ':'')+v+u; }
 /* ================= ACCESSORIES & EQUIPMENT (30) ================= */
 const ACC_SLOTS=['head','face','body','back','hand','feet'];
 const ACC_SLOT_NAME={head:'Kepala',face:'Wajah',body:'Badan',back:'Punggung',hand:'Tangan',feet:'Kaki'};
@@ -1003,8 +1025,8 @@ const Save = {
   all(){ return this.accounts.list.map(id=>({id, p: id===this.accounts.current ? this.profile : this.readProfile(id)})).filter(a=>a.p); },
   squad(){ return this.profile.squad ? this.squads.find(s=>s.id===this.profile.squad) : null; },
   owns(kind,id){ return kind==='char' ? this.profile.chars.includes(id) : kind==='acc' ? this.profile.acc.owned.includes(id) : this.profile.weapons.includes(id); },
-  canAfford(c){ const p=this.profile; if(!c) return true; if(c.gold) return p.gold>=c.gold; if(c.points) return p.points>=c.points; return p.brill>=c.brill; },
-  pay(c){ const p=this.profile; if(c.gold) p.gold-=c.gold; else if(c.points) p.points-=c.points; else p.brill-=c.brill; }
+  canAfford(c){ const p=this.profile; if(!c) return true; c=Live.cost(c); if(c.gold) return p.gold>=c.gold; if(c.points) return p.points>=c.points; return p.brill>=c.brill; },
+  pay(c){ const p=this.profile; c=Live.cost(c); if(c.gold) p.gold-=c.gold; else if(c.points) p.points-=c.points; else p.brill-=c.brill; }
 };
 /* ================= AUDIO (synthesized, positional) ================= */
 const Sound = {
@@ -4516,16 +4538,18 @@ Game.endMatch=function(){
   let zk=1;
   if(result==='win'&&M.mode==='zombie'){ zk=Math.max(.3,1-me.deaths*.1); gold=Math.round((260+me.kills*6)*zk); pts=Math.round((130+me.kills*4+me.heads*2)*zk); br=Math.max(1,Math.round((2+(mvp?1:0))*zk)); }
   else if(result==='win'){ gold=250+me.kills*10+me.caps*40; pts=120+me.kills*6+me.heads*4; br=2+(mvp?1:0)+(me.caps>0?1:0); }
+  const lb=Live.bonus(); if(lb){ gold=Math.round(gold*lb.gold); pts=Math.round(pts*lb.pts); br=Math.round(br*lb.br); if(result!=='win') gold+=lb.joinGold; }
   const oldRank=P.rank; if(result==='win') P.rank=Math.min(RANKS.length-1,P.rank+1);
   P.gold+=gold; P.points+=pts; P.brill+=br;
   P.stats.matches++; if(result==='win') P.stats.wins++; P.stats.kills+=me.kills; P.stats.deaths+=me.deaths; P.stats.heads+=me.heads; P.stats.caps+=me.caps;
   Save.save();
+  Live.matchEnd(M,me,result,oldRank);
   Game.unlockPointer(); Sound.stopLoops(); Game.paused=false; $('pause').hidden=true;
   $('hud').hidden=true; $('death').hidden=true; $('board').hidden=true; $('touch').hidden=true;
   $('eTitle').textContent=result==='win'?'MENANG':result==='loss'?'KALAH':'SERI';
   $('eTitle').style.color=result==='win'?'var(--hazard)':result==='loss'?'#ff7a7a':'var(--fg)';
   $('eSub').textContent=MODES[M.mode].name+' · '+ARENAS[M.arena].name+(M.online?' · ONLINE':'');
-  $('eScore').textContent=M.mode==='zombie'?`Zombi tumbang ${s0} · kamu mati ${s1}× · gelombang ${M.z?M.z.wave:0}/${M.z?M.z.total:0}${result==='win'?' · hadiah ×'+zk.toFixed(1)+(me.deaths?' (dikurangi karena mati)':' (tanpa mati!)'):''}`+(mvp?' · Kamu MVP!':''):(M.mode==='ffa'?`Kill kamu ${s0} · kill teratas lawan ${s1}`:(M.mode==='ctf'?`Bendera ${s0} – ${s1}`:`Kill tim ${s0} – ${s1}`))+(mvp?' · Kamu MVP!':'');
+  $('eScore').textContent=M.mode==='zombie'?`Zombi tumbang ${s0} · kamu mati ${s1}× · gelombang ${M.z?M.z.wave:0}/${M.z?M.z.total:0}${result==='win'?' · hadiah ×'+zk.toFixed(1)+(me.deaths?' (dikurangi karena mati)':' (tanpa mati!)'):''}`+(mvp?' · Kamu MVP!':''):(M.mode==='ffa'?`Kill kamu ${s0} · kill teratas lawan ${s1}`:(M.mode==='ctf'?`Bendera ${s0} – ${s1}`:`Kill tim ${s0} – ${s1}`))+(mvp?' · Kamu MVP!':'')+(lb?' · Bonus '+lb.name:'');
   const rw=$('eRewards'); rw.innerHTML=`<div class="rw g"><span class="muted">Gold</span><b class="num" data-to="${gold}">+0</b></div><div class="rw p"><span class="muted">Poin</span><b class="num" data-to="${pts}">+0</b></div><div class="rw b"><span class="muted">Diamond</span><b class="num" data-to="${br}">+0</b></div>`;
   rw.querySelectorAll('b').forEach(b=>{ const to=+b.dataset.to; const st=performance.now(); const step=()=>{ const k=Math.min(1,(performance.now()-st)/900); b.textContent='+'+Math.round(to*k); if(k<1) requestAnimationFrame(step); }; step(); });
   $('eRank').innerHTML=P.rank>oldRank?`<div class="rankup"><img src="${insignia(P.rank)}" alt=""><div><div class="eyebrow">NAIK PANGKAT</div><b style="font-size:20px">${RANKS[P.rank][0]} (${RANKS[P.rank][1]})</b><div class="muted">dari ${RANKS[oldRank][0]}</div></div></div>`
@@ -4906,6 +4930,284 @@ const Lobby={
       if(n) this.renderAcct(); };
   }
 };
+/* ================= LIVE: developer updates without republishing + anonymous visitor analytics =================
+   Talks ONLY to the developer's own database (Supabase URL + public anon key from jw-config.js).
+   Nothing here contacts Claude or any AI service. Without jw-config.js the game simply runs as before.
+   Row jw_live.config (edited from the developer dashboard):
+     announce{on,title,text,style,popup}  ticker{on,text}  maint{on,text,until}
+     event{on,name,gold,pts,br,joinGold,until}  shop{discount,until}  modesOff[]  arenasOff[]
+     night{every,dur}  autofire{dwell}  css  js
+   html_ver>0 = the developer uploaded a full game build: it is loaded in place of this one (same domain). */
+const Live={
+  C:null, row:null, cfg:{}, ver:0, hv:0, q:[], ft:0, errN:0, errSeen:new Set(), off:false, child:false, shell:false, booted:false, lastPoll:0, pend:null,
+  ok(){ return !!(this.C&&this.C.url&&this.C.key); },
+  base(){ return String(this.C.url).replace(/\/+$/,'')+'/rest/v1/'; },
+  hdr(json){ const k=this.C.key, h={apikey:k}; if(/^eyJ/.test(k)) h.Authorization='Bearer '+k; if(json){ h['Content-Type']='application/json'; h.Prefer='return=minimal'; } return h; },
+  rid(n){ const a='abcdefghijklmnopqrstuvwxyz0123456789'; let s=''; const r=crypto&&crypto.getRandomValues?crypto.getRandomValues(new Uint8Array(n)):null; for(let i=0;i<n;i++) s+=a[(r?r[i]:Math.random()*256|0)%36]; return s; },
+  ls(k,v){ try{ if(v===undefined) return localStorage.getItem(k); if(v===null) localStorage.removeItem(k); else localStorage.setItem(k,v); }catch(e){ return null; } },
+
+  /* ---------- start-up: wait for the early fetch (max ~4 s), then either hand over to an uploaded build or boot this one ---------- */
+  start(boot){
+    this.C=window.JW_LIVE||null; this.child=!!window.__JW_LIVE_CHILD;
+    const qs=new URLSearchParams(location.search);
+    if(qs.get('dev')==='1') this.ls('jw_nostat','1'); else if(qs.get('dev')==='0') this.ls('jw_nostat',null);
+    this.off=this.ls('jw_nostat')==='1'||!this.ok();
+    this.ids();
+    this.install();
+    if(!this.ok()){ boot(); this.booted=true; return; }
+    let done=false;
+    const go=row=>{
+      if(done) return; done=true;
+      this.row=row||null; this.ver=row?row.version|0:0; this.hv=row?row.html_ver|0:0;
+      if(row&&this.hv>0&&!this.child&&qs.get('nolive')!=='1'){ this.handOver(row,boot); return; }
+      this.apply(row&&row.config||{});
+      try{ boot(); } finally { this.booted=true; this.afterBoot(); }
+    };
+    (window.__JW_LIVE_P||Promise.resolve(null)).then(go,()=>go(null));
+    setTimeout(()=>{ let c=null; try{ c=JSON.parse(this.ls('jw_live_row')||'null'); }catch(e){} go(c); },4200);
+  },
+  ids(){
+    let v=this.ls('jw_vid'); this.isNew=!v; if(!v){ v='v'+this.rid(15); this.ls('jw_vid',v); }
+    this.vid=v;
+    this.sid=window.__JW_SID||('s'+this.rid(15)); window.__JW_SID=this.sid;
+  },
+
+  /* ---------- full-build override: load the uploaded game in a full-screen frame on the same page (same domain, same saves) ---------- */
+  handOver(row,boot){
+    this.shell=true;
+    const fallback=why=>{ console.warn('LIVE: memakai build bawaan ('+why+')'); this.shell=false; this.apply(row.config||{}); try{ boot(); } finally { this.booted=true; this.afterBoot(); } };
+    const cached=()=>{ try{ const c=JSON.parse(this.ls('jw_live_html')||'null'); return c&&c.v===this.hv&&typeof c.h==='string'?c.h:null; }catch(e){ return null; } };
+    const use=html=>{
+      if(!html||html.length<200) return fallback('build kosong');
+      window.__JW_LIVE_ROW={version:row.version,html_ver:row.html_ver,config:row.config||{}};
+      const inj='<script>window.__JW_LIVE_CHILD=1;try{window.JW_LIVE=parent.JW_LIVE;window.__JW_SID=parent.__JW_SID;window.__JW_LIVE_P=Promise.resolve(parent.__JW_LIVE_ROW);}catch(e){}<\/script>';
+      const m=/<head[^>]*>/i.exec(html), doc=m?html.slice(0,m.index+m[0].length)+inj+html.slice(m.index+m[0].length):inj+html;
+      const f=document.createElement('iframe');
+      f.id='liveFrame'; f.setAttribute('allow','fullscreen; autoplay; gamepad; clipboard-write'); f.setAttribute('allowfullscreen','');
+      f.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;border:0;z-index:2147483647;background:#07090b';
+      f.srcdoc=doc;
+      f.addEventListener('load',()=>{ try{ f.contentWindow.focus(); if(f.contentDocument.title) document.title=f.contentDocument.title; }catch(e){} });
+      document.addEventListener('pointerdown',()=>{ try{ f.contentWindow.focus(); }catch(e){} },true);
+      document.body.appendChild(f);
+      const app=document.getElementById('app'); if(app) app.style.visibility='hidden';
+      this.track();          // the shell counts the visit and session time; the frame reports gameplay
+    };
+    const c=cached(); if(c) return use(c);
+    const ctl=window.AbortController?new AbortController():null, t=setTimeout(()=>ctl&&ctl.abort(),15000);
+    fetch(this.base()+'jw_live?id=eq.1&select=html_ver,game_html',{headers:this.hdr(),cache:'no-store',signal:ctl&&ctl.signal})
+      .then(r=>r.ok?r.json():Promise.reject(r.status)).then(a=>{ clearTimeout(t); const r=a&&a[0]; if(!r||!r.game_html) return fallback('build tidak ada');
+        this.hv=r.html_ver|0; this.ls('jw_live_html',null); this.ls('jw_live_html',JSON.stringify({v:this.hv,h:r.game_html})); use(r.game_html); })
+      .catch(e=>fallback('gagal mengunduh build: '+e));
+  },
+
+  /* ---------- live settings ---------- */
+  num(v,d,lo,hi){ v=+v; if(!isFinite(v)) return d; return Math.max(lo,Math.min(hi,v)); },
+  active(o){ if(!o||!o.on) return false; if(o.until){ const t=Date.parse(o.until); if(isFinite(t)&&Date.now()>t) return false; } return true; },
+  apply(cfg){
+    const old=this.cfg||{}; this.cfg=cfg=(cfg&&typeof cfg==='object')?cfg:{};
+    if(cfg.night){ NIGHT.EVERY=this.num(cfg.night.every,180,60,1200); NIGHT.DUR=this.num(cfg.night.dur,25,8,Math.min(150,NIGHT.EVERY-20)); }
+    else { NIGHT.EVERY=180; NIGHT.DUR=25; }
+    AutoFire.DWELL=cfg.autofire?this.num(cfg.autofire.dwell,1.2,.3,4):1.2;
+    let st=document.getElementById('jwLiveCss'); if(!st){ st=document.createElement('style'); st.id='jwLiveCss'; document.head.appendChild(st); }
+    st.textContent=typeof cfg.css==='string'?cfg.css.slice(0,60000):'';
+    if(this.booted){ this.ui(); if(Game.state==='lobby'){ try{ Lobby.renderAll(); }catch(e){} } }
+    return old;
+  },
+  modeOff(id){ const a=this.cfg.modesOff; return Array.isArray(a)&&a.includes(id); },
+  arenaOff(i){ const a=this.cfg.arenasOff, A=ARENAS[i]; return !!A&&Array.isArray(a)&&a.includes(A.id); },
+  /* shop discount (percent) applied to every price */
+  cost(c){
+    const s=this.cfg.shop; if(!c||!s||!(s.discount>0)) return c;
+    if(s.until){ const t=Date.parse(s.until); if(isFinite(t)&&Date.now()>t) return c; }
+    const k=1-this.num(s.discount,0,0,95)/100, o={};
+    for(const key of ['gold','points','brill']) if(c[key]) o[key]=Math.max(1,Math.round(c[key]*k));
+    return o;
+  },
+  /* event reward multipliers (only while the event runs) */
+  bonus(){
+    const e=this.cfg.event; if(!this.active(e)) return null;
+    return {name:String(e.name||'EVENT').slice(0,40),gold:this.num(e.gold,1,0,20),pts:this.num(e.pts,1,0,20),br:this.num(e.br,1,0,20),joinGold:this.num(e.joinGold,0,0,100000)|0};
+  },
+
+  /* ---------- wrap game entry points (no gameplay code changes) ---------- */
+  install(){
+    const self=this;
+    const sm=Game.startMatch;
+    Game.startMatch=function(modeId,minutes){
+      if(self.maintOn()){ Game.toast('Game sedang dalam perbaikan. Coba lagi nanti.'); return; }
+      if(self.modeOff(modeId)){ Game.toast('Mode '+(MODES[modeId]?MODES[modeId].name:modeId)+' sedang ditutup oleh developer.'); return; }
+      const P=Save.profile, keep=Game.forceArena;
+      if(Game.forceArena==null&&Array.isArray(self.cfg.arenasOff)&&self.cfg.arenasOff.length){
+        if(P.arena>=0&&self.arenaOff(P.arena)){ P.arena=-1; Game.toast('Arena itu sedang ditutup. Dipilih arena acak.'); }
+        if(P.arena<0){ const ok=ARENAS.map((a,i)=>i).filter(i=>!self.arenaOff(i)&&i!==P.lastArena); const all=ARENAS.map((a,i)=>i).filter(i=>!self.arenaOff(i)); const pool=ok.length?ok:all; if(pool.length) Game.forceArena=pool[Math.floor(Math.random()*pool.length)]; }
+      }
+      const before=Game.match;
+      try{ sm.apply(this,arguments); } finally { Game.forceArena=keep; }
+      if(Game.match&&Game.match!==before) self.matchStart(Game.match);
+    };
+    const sc=Game.startClientMatch;
+    Game.startClientMatch=function(d){ const before=Game.match; sc.apply(this,arguments); if(Game.match&&Game.match!==before) self.matchStart(Game.match); };
+    for(const fn of ['renderMain','renderOnline']){
+      const o=Lobby[fn]; if(typeof o!=='function') continue;
+      Lobby[fn]=function(){ const r=o.apply(this,arguments); try{ self.markLobby(); }catch(e){} return r; };
+    }
+    // purchases: compare the wallet before/after a buy
+    const wrapBuy=(name,kindOf)=>{ const o=Lobby[name]; if(typeof o!=='function') return;
+      Lobby[name]=function(a,b){ const P=Save.profile, g=P.gold, p=P.points, br=P.brill; const r=o.apply(this,arguments);
+        const dg=g-P.gold, dp=p-P.points, db=br-P.brill;
+        if(dg>0||dp>0||db>0) self.ev('buy',{kind:kindOf(a,b),id:String(b).slice(0,40),cur:dg>0?'gold':dp>0?'points':'brill',amt:dg>0?dg:dp>0?dp:db});
+        return r; }; };
+    wrapBuy('buy',(k)=>k); wrapBuy('accAct',()=>'acc');
+    window.addEventListener('error',e=>{ const m=e&&(e.message||(e.error&&e.error.message)); if(!m||/^Script error\.?$/.test(m)) return; self.err(m,(e.filename?String(e.filename).split('/').pop():'')+':'+(e.lineno||0)); });
+    window.addEventListener('unhandledrejection',e=>{ const r=e&&e.reason; self.err('Promise: '+(r&&r.message||String(r)),'promise'); });
+  },
+  markLobby(){
+    const lob=document.getElementById('lobby'); if(!lob) return;
+    lob.querySelectorAll('[data-mode]').forEach(b=>{ const off=this.modeOff(b.dataset.mode); b.disabled=off; b.classList.toggle('live-off',off); b.title=off?'Ditutup sementara oleh developer':''; });
+    lob.querySelectorAll('[data-arena]').forEach(b=>{ const i=+b.dataset.arena; if(i<0) return; const off=this.arenaOff(i); b.disabled=off; b.classList.toggle('live-off',off); b.title=off?'Ditutup sementara oleh developer':''; });
+  },
+
+  /* ---------- on-screen pieces: announcement, popup, ticker, maintenance, update pill ---------- */
+  css(){
+    if(document.getElementById('jwLiveBase')) return;
+    const s=document.createElement('style'); s.id='jwLiveBase';
+    s.textContent=`
+.live-off{opacity:.38!important;filter:grayscale(1);cursor:not-allowed!important}
+#liveAnn{flex:none;display:flex;gap:12px;align-items:flex-start;margin:10px max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));padding:10px 12px 10px 14px;border:1px solid var(--line2);border-left:4px solid var(--blue);background:var(--panel2);border-radius:6px;font-size:14px;line-height:1.45}
+#liveAnn.warn{border-left-color:var(--red)} #liveAnn.event{border-left-color:var(--hazard)}
+#liveAnn b{display:block;font-family:var(--f-ui,inherit);letter-spacing:.04em} #liveAnn p{margin:2px 0 0;color:var(--fg);white-space:pre-wrap;overflow-wrap:anywhere}
+#liveAnn button{margin-left:auto;flex:none;background:none;border:0;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:2px 4px}
+#liveTick{flex:none;overflow:hidden;white-space:nowrap;border-bottom:1px solid var(--line);background:rgba(5,7,9,.7);font-size:13px;color:var(--hazard);padding:6px 0}
+#liveTick span{display:inline-block;padding-left:100%;animation:liveTick 22s linear infinite}
+@keyframes liveTick{to{transform:translateX(-100%)}}
+@media (prefers-reduced-motion:reduce){#liveTick span{animation:none;padding-left:16px;white-space:normal}}
+#liveEvt{display:inline-flex;gap:6px;align-items:center;margin-left:8px;padding:2px 8px;border-radius:999px;background:var(--hazard);color:var(--hazard-ink);font-size:12px;font-weight:700;vertical-align:middle}
+#liveMaint{position:absolute;inset:0;z-index:75;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;background:radial-gradient(circle at 50% 40%,#1b2430,#07090b 75%)}
+#liveMaint h2{font-family:var(--f-display);font-size:clamp(26px,6vw,44px);margin:0;color:var(--hazard)} #liveMaint p{max-width:520px;margin:0;color:var(--fg);white-space:pre-wrap;line-height:1.5} #liveMaint small{color:var(--muted)}
+#livePop{position:absolute;inset:0;z-index:72;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.6)}
+#livePop>div{max-width:460px;width:100%;background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+#livePop h3{margin:0 0 8px;font-family:var(--f-display);font-size:24px;color:var(--hazard)} #livePop p{margin:0 0 16px;white-space:pre-wrap;line-height:1.5;overflow-wrap:anywhere}
+#liveUpd{position:absolute;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:71;display:flex;gap:10px;align-items:center;padding:8px 8px 8px 16px;border-radius:999px;background:var(--panel2);border:1px solid var(--hazard);box-shadow:0 8px 30px rgba(0,0,0,.5);font-size:14px;white-space:nowrap}
+#liveUpd button{border:0;border-radius:999px;background:var(--hazard);color:var(--hazard-ink);font-weight:700;padding:8px 14px;cursor:pointer;font-family:inherit}`;
+    document.head.appendChild(s);
+    const own=document.getElementById('jwLiveCss'); if(own) document.head.appendChild(own);   // developer CSS stays last so it wins
+  },
+  maintOn(){ return this.active(this.cfg.maint); },
+  ui(){
+    this.css();
+    const cfg=this.cfg, lob=document.getElementById('lobby'), top=lob&&lob.querySelector('.topbar');
+    // ticker
+    let tk=document.getElementById('liveTick'); const tOn=this.active(cfg.ticker)&&cfg.ticker.text;
+    if(tOn&&top){ if(!tk){ tk=document.createElement('div'); tk.id='liveTick'; tk.appendChild(document.createElement('span')); top.after(tk); } tk.firstChild.textContent=String(cfg.ticker.text).slice(0,400); } else if(tk) tk.remove();
+    // banner
+    const a=cfg.announce, aid=a?'a'+this.hash(String(a.title||'')+'|'+String(a.text||'')):'';
+    let an=document.getElementById('liveAnn'); const aOn=this.active(a)&&(a.title||a.text)&&this.ls('jw_ann_x')!==aid;
+    if(aOn&&top){ if(!an){ an=document.createElement('div'); an.id='liveAnn'; an.setAttribute('role','status'); (document.getElementById('liveTick')||top).after(an); }
+      an.className=['warn','event'].includes(a.style)?a.style:''; an.innerHTML='<div><b></b><p></p></div><button aria-label="Tutup">×</button>';
+      an.querySelector('b').textContent=String(a.title||'PENGUMUMAN').slice(0,80); an.querySelector('p').textContent=String(a.text||'').slice(0,1200);
+      an.querySelector('button').onclick=()=>{ this.ls('jw_ann_x',aid); an.remove(); };
+    } else if(an) an.remove();
+    // popup once per announcement
+    if(this.active(a)&&a.popup&&(a.title||a.text)&&this.ls('jw_ann_pop')!==aid&&!document.getElementById('livePop')){
+      const pop=document.createElement('div'); pop.id='livePop'; pop.innerHTML='<div role="dialog" aria-modal="true"><h3></h3><p></p><button class="btn y">OKE</button></div>';
+      pop.querySelector('h3').textContent=String(a.title||'PENGUMUMAN').slice(0,80); pop.querySelector('p').textContent=String(a.text||'').slice(0,1200);
+      pop.querySelector('button').onclick=()=>{ this.ls('jw_ann_pop',aid); pop.remove(); };
+      (document.getElementById('app')||document.body).appendChild(pop);
+    }
+    // event chip next to the greeting
+    const ev=this.bonus(), mh=document.querySelector('#lobby .pane[data-pane="main"] h2'); let chip=document.getElementById('liveEvt');
+    if(ev&&mh){ if(!chip){ chip=document.createElement('span'); chip.id='liveEvt'; mh.appendChild(chip); } const parts=[]; if(ev.gold!==1) parts.push('Gold ×'+ev.gold); if(ev.pts!==1) parts.push('Poin ×'+ev.pts); if(ev.br!==1) parts.push('Diamond ×'+ev.br); if(ev.joinGold) parts.push('+'+ev.joinGold+' Gold ikut main'); chip.textContent=ev.name+(parts.length?' · '+parts.join(' · '):''); }
+    else if(chip) chip.remove();
+    const s=this.cfg.shop, sp=document.querySelector('#lobby .tab[data-tab="shop"]');
+    if(sp){ const on=s&&s.discount>0&&this.cost({gold:100}).gold<100; sp.textContent=on?'TOKO −'+Math.round(this.num(s.discount,0,0,95))+'%':'TOKO'; }
+    this.tick();
+  },
+  tick(){
+    // maintenance screen only outside a running match; the update pill only in the lobby
+    const inMatch=!!(Game.match&&Game.match.state!=='end'&&Game.state==='match');
+    let mt=document.getElementById('liveMaint'); const mOn=this.maintOn()&&!inMatch;
+    if(mOn){ if(!mt){ mt=document.createElement('div'); mt.id='liveMaint'; mt.innerHTML='<h2>SEDANG PERBAIKAN</h2><p></p><small></small><button class="btn y">MUAT ULANG</button>'; mt.querySelector('button').onclick=()=>this.reload(); (document.getElementById('app')||document.body).appendChild(mt); }
+      const m=this.cfg.maint; mt.querySelector('p').textContent=String(m.text||'Developer sedang memperbarui game. Silakan kembali sebentar lagi.').slice(0,600);
+      const u=Date.parse(m.until); mt.querySelector('small').textContent=isFinite(u)?'Perkiraan selesai: '+new Date(u).toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'}):''; }
+    else if(mt) mt.remove();
+    let up=document.getElementById('liveUpd');
+    if(this.pend&&Game.state==='lobby'){ if(!up){ up=document.createElement('div'); up.id='liveUpd'; up.innerHTML='<span>Versi baru game tersedia</span><button>MUAT ULANG</button>'; up.querySelector('button').onclick=()=>this.reload(); (document.getElementById('app')||document.body).appendChild(up); } }
+    else if(up) up.remove();
+  },
+  reload(){ try{ top.location.reload(); }catch(e){ location.reload(); } },
+  hash(s){ let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0; return (h>>>0).toString(36); },
+
+  afterBoot(){
+    this.ui();
+    if(this.ok()){
+      if(!this.child) this.track();
+      setInterval(()=>this.tick(),2000);
+      setInterval(()=>{ if(document.visibilityState==='visible') this.poll(); },180000);
+      document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&Date.now()-this.lastPoll>60000) this.poll(); });
+      this.lastPoll=Date.now();
+    }
+    const js=this.cfg.js;
+    if(typeof js==='string'&&js.trim()){ try{ new Function('Game','Save','Lobby','Live',js)(Game,Save,Lobby,this); }catch(e){ console.error('LIVE js',e); this.err('Live JS: '+e.message,'live-js'); } }
+  },
+  /* check whether the developer published something new */
+  poll(){
+    if(!this.ok()) return; this.lastPoll=Date.now();
+    fetch(this.base()+'jw_live?id=eq.1&select=version,config,html_ver,updated_at',{headers:this.hdr(),cache:'no-store'})
+      .then(r=>r.ok?r.json():null).then(a=>{ const row=a&&a[0]; if(!row||(row.version|0)<=this.ver) return;
+        this.ls('jw_live_row',JSON.stringify(row));
+        const nc=row.config||{}, oc=this.cfg||{};
+        const reload=(row.html_ver|0)!==this.hv||String(nc.js||'')!==String(oc.js||'');
+        this.ver=row.version|0; this.apply(nc);
+        if(reload){ this.pend=row; this.tick(); } else Game.toast('Developer memperbarui pengaturan game');
+      }).catch(()=>{});
+  },
+
+  /* ---------- analytics (anonymous: random visitor id, no personal data) ---------- */
+  ua(){
+    const u=navigator.userAgent||'', touch=('ontouchstart' in window)||navigator.maxTouchPoints>0, sm=Math.min(screen.width||0,screen.height||0);
+    const os=/Android/i.test(u)?'Android':/iPhone|iPad|iPod/i.test(u)||(/Macintosh/.test(u)&&touch)?'iOS':/Windows/i.test(u)?'Windows':/CrOS/.test(u)?'ChromeOS':/Mac OS X|Macintosh/.test(u)?'macOS':/Linux/i.test(u)?'Linux':'Lainnya';
+    const br=/Edg\//.test(u)?'Edge':/OPR\/|Opera/.test(u)?'Opera':/SamsungBrowser/.test(u)?'Samsung':/Firefox|FxiOS/.test(u)?'Firefox':/CriOS|Chrome\//.test(u)?'Chrome':/Safari\//.test(u)?'Safari':'Lainnya';
+    const dev=touch?(sm&&sm<600?'mobile':'tablet'):'desktop';
+    return {os,br,dev};
+  },
+  track(){
+    if(this.tracked) return; this.tracked=true;
+    const q=new URLSearchParams(location.search), u=this.ua();
+    let ref=''; try{ if(document.referrer){ const h=new URL(document.referrer).hostname; if(h&&h!==location.hostname) ref=h.replace(/^www\./,''); } }catch(e){}
+    ref=(q.get('utm_source')||q.get('ref')||ref||'').slice(0,60);
+    let tz=''; try{ tz=Intl.DateTimeFormat().resolvedOptions().timeZone||''; }catch(e){}
+    const P=(typeof Save!=='undefined')&&Save.profile;
+    this.ev('visit',{new:this.isNew?'1':'0',dev:u.dev,br:u.br,os:u.os,ref,lang:(navigator.language||'').slice(0,12),tz:tz.slice(0,40),w:screen.width|0,h:screen.height|0,ver:this.ver,hv:this.hv,rank:P?P.rank|0:0});
+    this.flush();
+    setInterval(()=>{ if(document.visibilityState==='visible') this.ev('beat',{}); },60000);
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') this.flush(true); });
+    addEventListener('pagehide',()=>this.flush(true));
+  },
+  ev(type,data){
+    if(this.off||!this.ok()) return;
+    this.q.push({vid:this.vid,sid:this.sid,type,data:data||{}});
+    if(this.q.length>=12) this.flush(); else if(!this.ft) this.ft=setTimeout(()=>this.flush(),type==='beat'?1500:8000);
+  },
+  flush(keep){
+    clearTimeout(this.ft); this.ft=0;
+    if(!this.q.length||!this.ok()) return;
+    const batch=this.q.splice(0,40);
+    fetch(this.base()+'jw_events',{method:'POST',headers:this.hdr(true),body:JSON.stringify(batch),keepalive:!!keep})
+      .then(r=>{ if(!r.ok&&r.status>=500&&!keep&&this.q.length<60) this.q.unshift(...batch); })
+      .catch(()=>{ if(!keep&&this.q.length<60){ this.q.unshift(...batch); this.ft=setTimeout(()=>this.flush(),30000); } });
+    if(this.q.length&&!keep) this.ft=setTimeout(()=>this.flush(),1000);
+  },
+  err(msg,src){
+    if(this.errN>=5) return; const k=String(msg).slice(0,200); if(this.errSeen.has(k)) return; this.errSeen.add(k); this.errN++;
+    this.ev('error',{msg:k,src:String(src||'').slice(0,120),ver:this.ver});
+  },
+  matchStart(M){ M._liveT0=performance.now(); this.ev('match_start',{mode:M.mode,arena:ARENAS[M.arena]?ARENAS[M.arena].id:String(M.arena),net:Net.role||'off',min:M.minutes|0}); },
+  matchEnd(M,me,res,oldRank){
+    const P=Save.profile, dur=M._liveT0?Math.round((performance.now()-M._liveT0)/1000):0;
+    this.ev('match_end',{mode:M.mode,arena:ARENAS[M.arena]?ARENAS[M.arena].id:String(M.arena),net:Net.role||'off',res,k:me.kills|0,d:me.deaths|0,h:me.heads|0,dur,nm:String(P.name||'').slice(0,20),rank:P.rank|0});
+    if(P.rank>oldRank) this.ev('rank',{rank:P.rank|0});
+  }
+};
 /* ================= BOOT, INPUT, LOOP ================= */
 Game.setWorld=function(idx,inMatch){
   const old=Game.world;
@@ -5169,6 +5471,6 @@ function boot(){
     document.addEventListener('pointerdown',()=>Sound.init(),{once:true});
   }catch(e){ console.error(e); msg.textContent='Gagal memulai game: '+e.message; }
 }
-boot();
+Live.start(boot);
 </script>
 </body></html>
